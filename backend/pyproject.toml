@@ -1,0 +1,65 @@
+[project]
+name = "company-research-agent"
+version = "0.1.0"
+description = "上市公司深度研究 Agent 系统"
+authors = [{ name = "Developer" }]
+requires-python = ">=3.10"
+readme = "README.md"
+
+dependencies = [
+    # FastAPI and Web
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "python-multipart>=0.0.19",
+    "websockets>=14.1",
+    # Agno Agent Framework (最新版本)
+    "agno>=2.3.18",
+    # OpenAI Compatible LLM
+    "openai>=1.58.0",
+    # HTTP Client
+    "httpx>=0.28.0",
+    # Database
+    "sqlalchemy>=2.0.36",
+    "aiosqlite>=0.20.0",
+    # PDF Generation
+    "reportlab>=4.2.5",
+    # Environment
+    "python-dotenv>=1.0.1",
+    # Pydantic
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "matplotlib>=3.10.8",
+    "python-jose[cryptography]>=3.5.0",
+    "bcrypt>=5.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "black>=24.0.0",
+    "isort>=5.13.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.black]
+line-length = 100
+target-version = ['py310']
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+# 使用清华源
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true

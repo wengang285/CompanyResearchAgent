@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  # 后端服务
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: research-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4}
+      - SERPER_API_KEY=${SERPER_API_KEY}
+      - DATABASE_URL=sqlite+aiosqlite:///./data/research.db
+      - SECRET_KEY=${SECRET_KEY:-your-production-secret-key-change-me}
+      - DEBUG=false
+      - FRONTEND_URL=http://localhost
+    volumes:
+      - backend_data:/app/data
+      - backend_reports:/app/reports
+    networks:
+      - research-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 前端服务
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: research-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - research-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  research-network:
+    driver: bridge
+
+volumes:
+  backend_data:
+    driver: local
+  backend_reports:
+    driver: local
+
+
+
+
