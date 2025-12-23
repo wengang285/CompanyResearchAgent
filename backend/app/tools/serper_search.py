@@ -1,5 +1,6 @@
 """Google Serper API 搜索工具"""
 import logging
+from datetime import datetime, timedelta
 
 import httpx
 from typing import List, Dict, Any, Optional
@@ -19,7 +20,8 @@ class SerperSearchTool:
         self,
         query: str,
         num_results: int = 10,
-        search_type: str = "search"
+        search_type: str = "search",
+        time_range: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         执行搜索
@@ -28,19 +30,27 @@ class SerperSearchTool:
             query: 搜索查询
             num_results: 返回结果数量
             search_type: 搜索类型 (search, news, images)
+            time_range: 时间范围 (d: 天, w: 周, m: 月, y: 年)
         
         Returns:
             搜索结果字典
         """
+        # 构建搜索参数
+        search_params = {
+            "q": query,
+            "num": num_results,
+            "gl": "cn",
+            "hl": "zh-cn",
+        }
+        
+        # 添加时间范围（如果指定）
+        if time_range:
+            search_params["tbs"] = f"qdr:{time_range}"  # qdr:d(天), qdr:w(周), qdr:m(月), qdr:y(年)
+        
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 self.base_url,
-                json={
-                    "q": query,
-                    "num": num_results,
-                    "gl": "cn",
-                    "hl": "zh-cn",
-                },
+                json=search_params,
                 headers={
                     "X-API-KEY": self.api_key,
                     "Content-Type": "application/json"
@@ -68,38 +78,71 @@ class SerperSearchTool:
         return {"type": "company_info", "results": results}
     
     async def search_financial_data(self, company: str) -> Dict[str, Any]:
-        """搜索财务数据"""
+        """搜索财务数据（优先最新数据）"""
+        current_year = datetime.now().year
+        last_year = current_year - 1
+        
+        # 优先搜索最新年份的财务数据
         queries = [
-            f"{company} 财务报表 年报",
-            f"{company} 营收 净利润 财务数据",
-            f"{company} 股票 市值 估值",
+            f"{company} {current_year}年 财务报表 年报",
+            f"{company} {last_year}年 年报 财务数据",
+            f"{company} 最新 营收 净利润 {current_year}",
+            f"{company} 股票 市值 估值 最新",
         ]
         
         results = []
         for query in queries:
             try:
-                result = await self.search(query, num_results=5)
+                # 财务数据优先搜索最近一年的
+                result = await self.search(query, num_results=5, time_range="y")
                 results.append(result)
             except Exception as e:
                 print(f"搜索失败: {query}, 错误: {e}")
         
         return {"type": "financial_data", "results": results}
     
-    async def search_recent_news(self, company: str) -> Dict[str, Any]:
-        """搜索最新新闻"""
-        query = f"{company} 最新新闻 动态"
+    async def search_recent_news(self, company: str, days: int = 30) -> Dict[str, Any]:
+        """
+        搜索最新新闻
+        
+        Args:
+            company: 公司名称
+            days: 搜索最近N天的新闻（默认30天）
+        """
+        # 根据天数选择时间范围关键词
+        if days <= 7:
+            time_keyword = "最近一周"
+        elif days <= 30:
+            time_keyword = "最近一个月"
+        elif days <= 90:
+            time_keyword = "最近三个月"
+        else:
+            time_keyword = "最新"
+        
+        query = f"{company} {time_keyword} 新闻 动态"
         
         try:
             # 使用新闻搜索
             async with httpx.AsyncClient(timeout=30.0) as client:
+                # 新闻API可能支持时间参数
+                news_params = {
+                    "q": query,
+                    "num": 10,
+                    "gl": "cn",
+                    "hl": "zh-cn",
+                }
+                
+                # 尝试添加时间范围（如果API支持）
+                if days <= 7:
+                    news_params["tbs"] = "qdr:d"  # 最近一天
+                elif days <= 30:
+                    news_params["tbs"] = "qdr:w"  # 最近一周
+                elif days <= 90:
+                    news_params["tbs"] = "qdr:m"  # 最近一个月
+                
                 response = await client.post(
                     "https://google.serper.dev/news",
-                    json={
-                        "q": query,
-                        "num": 10,
-                        "gl": "cn",
-                        "hl": "zh-cn",
-                    },
+                    json=news_params,
                     headers={
                         "X-API-KEY": self.api_key,
                         "Content-Type": "application/json"
@@ -112,16 +155,19 @@ class SerperSearchTool:
             return {"type": "news", "results": [], "error": str(e)}
     
     async def search_industry_analysis(self, company: str) -> Dict[str, Any]:
-        """搜索行业分析"""
+        """搜索行业分析（优先最新分析）"""
+        current_year = datetime.now().year
         queries = [
-            f"{company} 行业分析 市场地位",
-            f"{company} 竞争对手 行业格局",
+            f"{company} {current_year}年 行业分析 市场地位",
+            f"{company} 最新 竞争对手 行业格局",
+            f"{company} 行业趋势 发展前景 {current_year}",
         ]
         
         results = []
         for query in queries:
             try:
-                result = await self.search(query, num_results=5)
+                # 行业分析优先搜索最近一年的
+                result = await self.search(query, num_results=5, time_range="y")
                 results.append(result)
             except Exception as e:
                 print(f"搜索失败: {query}, 错误: {e}")
@@ -205,18 +251,21 @@ class SerperSearchTool:
         }
     
     async def _search_deep_financials(self, company: str) -> Dict[str, Any]:
-        """深度搜索财务数据"""
+        """深度搜索财务数据（优先最新数据）"""
+        current_year = datetime.now().year
+        last_year = current_year - 1
         queries = [
-            f"{company} 资产负债表 详细",
-            f"{company} 现金流量表 分析",
-            f"{company} 毛利率 净利率 ROE",
-            f"{company} 应收账款 存货周转",
+            f"{company} {current_year}年 资产负债表 详细",
+            f"{company} {last_year}年 现金流量表 分析",
+            f"{company} 最新 毛利率 净利率 ROE {current_year}",
+            f"{company} {current_year}年 应收账款 存货周转",
         ]
         
         results = []
         for query in queries:
             try:
-                result = await self.search(query, num_results=5)
+                # 财务数据优先搜索最近一年的
+                result = await self.search(query, num_results=5, time_range="y")
                 results.append(result)
             except Exception as e:
                 print(f"搜索失败: {query}, 错误: {e}")
@@ -241,16 +290,19 @@ class SerperSearchTool:
         return {"type": "management", "results": results}
     
     async def _search_risk_factors(self, company: str) -> Dict[str, Any]:
-        """搜索风险因素"""
+        """搜索风险因素（优先最新风险）"""
+        current_year = datetime.now().year
         queries = [
-            f"{company} 风险提示 风险因素",
-            f"{company} 诉讼 监管 处罚",
+            f"{company} {current_year}年 风险提示 风险因素",
+            f"{company} 最新 诉讼 监管 处罚",
+            f"{company} 最近 风险事件 负面新闻",
         ]
         
         results = []
         for query in queries:
             try:
-                result = await self.search(query, num_results=5)
+                # 风险因素优先搜索最近一年的
+                result = await self.search(query, num_results=5, time_range="y")
                 results.append(result)
             except Exception as e:
                 print(f"搜索失败: {query}, 错误: {e}")

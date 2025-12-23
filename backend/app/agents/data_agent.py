@@ -75,7 +75,15 @@ class DataAgent:
         industry = self._extract_text(search_results.get("industry_analysis", {}))
         
         # 使用 LLM 整理数据
+        from datetime import datetime
+        current_year = datetime.now().year
+        
         prompt = f"""请根据以下搜索结果，整理 {company} 公司的关键信息。
+
+**重要提示：**
+1. **时间维度至关重要**：请优先提取最新数据（{current_year}年或最近的数据）
+2. **明确标注时间**：对于财务数据、新闻、分析等，必须标注具体的时间/年份
+3. **区分历史与最新**：如果同时有历史数据和最新数据，优先使用最新数据，但可以保留历史数据用于对比
 
 ## 公司信息
 {company_info}
@@ -97,8 +105,8 @@ class DataAgent:
     "main_business": "主营业务描述(50-100字)",
     "key_products": ["主要产品1", "主要产品2"],
     "financial_summary": {{
-        "revenue": "最新营收情况",
-        "profit": "最新利润情况",
+        "revenue": "最新营收情况（必须标注年份，如：2024年营收XXX）",
+        "profit": "最新利润情况（必须标注年份）",
         "growth_rate": "增长率情况"
     }},
     "recent_events": ["近期重要事件1", "近期重要事件2"],
@@ -129,7 +137,7 @@ class DataAgent:
             # 使用流式LLM调用
             content = await streaming_llm.stream_completion_with_metadata(
                 prompt=prompt,
-                system_prompt="你是一个数据整理专家，负责将搜索结果整理成结构化数据。提取信息时要准确、客观，不要添加没有依据的信息。如果某项信息未找到，标注为\"未找到\"或留空。请用中文回复。",
+                system_prompt="你是一个数据整理专家，负责将搜索结果整理成结构化数据。提取信息时要准确、客观，不要添加没有依据的信息。**特别注意时间维度**：优先提取最新数据，明确标注时间/年份，区分历史数据和最新数据。如果某项信息未找到，标注为\"未找到\"或留空。请用中文回复。",
                 stream_callback=stream_handler,
                 temperature=0.3
             )
