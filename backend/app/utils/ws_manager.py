@@ -68,6 +68,24 @@ class ConnectionManager:
             
             for conn in disconnected:
                 self.disconnect_conversation(conversation_id, conn)
+    
+    async def broadcast_stream_chunk(
+        self,
+        conversation_id: str,
+        message_id: str,
+        agent_name: str,
+        chunk: str,
+        finished: bool = False
+    ):
+        """广播流式输出块到会话连接"""
+        data = {
+            "type": "stream_chunk",
+            "message_id": message_id,
+            "agent_name": agent_name,
+            "chunk": chunk,
+            "finished": finished
+        }
+        await self.broadcast_to_conversation(conversation_id, data)
 
 
 # 全局连接管理器实例

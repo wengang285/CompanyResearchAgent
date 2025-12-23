@@ -1,12 +1,14 @@
 """财务分析 Agent - 专注财务数据分析"""
 import json
 import re
-from typing import Dict, Any
+import uuid
+from typing import Dict, Any, Optional, Callable
 
 from agno.agent import Agent
 from agno.models.openai import OpenAILike
 
 from ..config import get_settings
+from ..utils.streaming_llm import streaming_llm
 
 settings = get_settings()
 
@@ -43,13 +45,19 @@ class FinanceAgent:
             markdown=True,
         )
     
-    async def run(self, data: Dict[str, Any], depth: str = "deep") -> Dict[str, Any]:
+    async def run(
+        self,
+        data: Dict[str, Any],
+        depth: str = "deep",
+        stream_callback: Optional[Callable] = None
+    ) -> Dict[str, Any]:
         """
         执行财务分析
         
         Args:
             data: DataAgent 整理后的结构化数据
             depth: 研究深度 (basic, standard, deep)
+            stream_callback: 流式回调函数 (message_id, agent_name, chunk, finished)
         
         Returns:
             财务分析结果
@@ -99,8 +107,30 @@ class FinanceAgent:
 评分范围 1-10 分。只返回 JSON。"""
 
         try:
-            response = self.agent.run(prompt)
-            content = response.content if hasattr(response, 'content') else str(response)
+            # 创建流式消息ID
+            message_id = str(uuid.uuid4())
+            full_content = ""
+            
+            # 流式回调包装
+            async def stream_handler(chunk: str, metadata: dict = None):
+                nonlocal full_content
+                full_content += chunk
+                
+                if stream_callback:
+                    await stream_callback(
+                        message_id=message_id,
+                        agent_name="FinanceAgent",
+                        chunk=chunk,
+                        finished=metadata.get("finished", False) if metadata else False
+                    )
+            
+            # 使用流式LLM调用
+            content = await streaming_llm.stream_completion_with_metadata(
+                prompt=prompt,
+                system_prompt="你是一位资深财务分析师，拥有丰富的上市公司财务分析经验。分析时要全面、专业，从多个维度评估公司财务健康状况。评分要客观，有理有据。如果信息不足，要明确指出并给出合理的判断依据。请用中文回复。",
+                stream_callback=stream_handler,
+                temperature=0.7
+            )
             
             json_match = re.search(r'\{[\s\S]*\}', content)
             if json_match:

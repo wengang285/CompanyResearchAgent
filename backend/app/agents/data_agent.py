@@ -1,12 +1,14 @@
 """数据整理 Agent - 负责将原始搜索结果结构化"""
 import json
 import re
-from typing import Dict, Any
+import uuid
+from typing import Dict, Any, Optional, Callable
 
 from agno.agent import Agent
 from agno.models.openai import OpenAILike
 
 from ..config import get_settings
+from ..utils.streaming_llm import streaming_llm
 
 settings = get_settings()
 
@@ -42,13 +44,19 @@ class DataAgent:
             markdown=True,
         )
     
-    async def run(self, search_data: Dict[str, Any], depth: str = "deep") -> Dict[str, Any]:
+    async def run(
+        self,
+        search_data: Dict[str, Any],
+        depth: str = "deep",
+        stream_callback: Optional[Callable] = None
+    ) -> Dict[str, Any]:
         """
         整理搜索结果
         
         Args:
             search_data: SearchAgent 返回的搜索结果
             depth: 研究深度 (basic, standard, deep)
+            stream_callback: 流式回调函数 (message_id, agent_name, chunk, finished)
         
         Returns:
             结构化的公司数据
@@ -101,8 +109,30 @@ class DataAgent:
 只返回 JSON，不要其他内容。"""
 
         try:
-            response = self.agent.run(prompt)
-            content = response.content if hasattr(response, 'content') else str(response)
+            # 创建流式消息ID
+            message_id = str(uuid.uuid4())
+            full_content = ""
+            
+            # 流式回调包装
+            async def stream_handler(chunk: str, metadata: dict = None):
+                nonlocal full_content
+                full_content += chunk
+                
+                if stream_callback:
+                    await stream_callback(
+                        message_id=message_id,
+                        agent_name="DataAgent",
+                        chunk=chunk,
+                        finished=metadata.get("finished", False) if metadata else False
+                    )
+            
+            # 使用流式LLM调用
+            content = await streaming_llm.stream_completion_with_metadata(
+                prompt=prompt,
+                system_prompt="你是一个数据整理专家，负责将搜索结果整理成结构化数据。提取信息时要准确、客观，不要添加没有依据的信息。如果某项信息未找到，标注为\"未找到\"或留空。请用中文回复。",
+                stream_callback=stream_handler,
+                temperature=0.3
+            )
             
             # 提取 JSON
             json_match = re.search(r'\{[\s\S]*\}', content)

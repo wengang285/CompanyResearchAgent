@@ -1,5 +1,6 @@
 """聊天服务 - 管理会话和消息"""
 import asyncio
+import uuid
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from sqlalchemy import select, desc
@@ -71,11 +72,13 @@ class ChatService:
         message_type: str = "text",
         agent_name: str = None,
         agent_status: str = None,
-        extra_data: Dict = None
+        extra_data: Dict = None,
+        message_id: str = None
     ) -> Message:
         """添加消息"""
         async with async_session_factory() as db:
             message = Message(
+                id=message_id or str(uuid.uuid4()),
                 conversation_id=conversation_id,
                 role=role,
                 content=content,
@@ -93,6 +96,37 @@ class ChatService:
             conversation = result.scalar_one_or_none()
             if conversation:
                 conversation.updated_at = datetime.utcnow()
+            
+            await db.commit()
+            await db.refresh(message)
+            return message
+    
+    async def update_message(
+        self,
+        message_id: str,
+        content: str = None,
+        agent_status: str = None,
+        extra_data: Dict = None,
+        message_type: str = None
+    ) -> Optional[Message]:
+        """更新现有消息"""
+        async with async_session_factory() as db:
+            result = await db.execute(
+                select(Message).where(Message.id == message_id)
+            )
+            message = result.scalar_one_or_none()
+            
+            if not message:
+                return None
+            
+            if content is not None:
+                message.content = content
+            if agent_status is not None:
+                message.agent_status = agent_status
+            if extra_data is not None:
+                message.extra_data = extra_data
+            if message_type is not None:
+                message.message_type = message_type
             
             await db.commit()
             await db.refresh(message)
@@ -219,21 +253,46 @@ class ChatService:
                 task.started_at = datetime.utcnow()
                 await db.commit()
             
-            # 进度回调 - 发送 Agent 状态消息
+            # 存储每个agent的消息ID，用于更新而不是创建新消息
+            agent_message_ids: Dict[str, str] = {}
+            # 存储流式消息内容
+            streamingMessages: Dict[str, str] = {}
+            
+            # 进度回调 - 更新或创建 Agent 状态消息
             async def progress_callback(progress: int, agent: str, task_desc: str, estimated: int = 0):
-                # 保存 Agent 状态消息
-                message = await self.add_message(
-                    conversation_id=conversation_id,
-                    role="agent",
+                # 获取或创建该agent的消息ID
+                if agent not in agent_message_ids:
+                    agent_message_ids[agent] = str(uuid.uuid4())
+                
+                message_id = agent_message_ids[agent]
+                
+                # 尝试更新现有消息，如果不存在则创建
+                message = await self.update_message(
+                    message_id=message_id,
                     content=task_desc,
-                    message_type="agent_status",
-                    agent_name=agent,
                     agent_status="working",
                     extra_data={
                         "progress": progress,
                         "estimated_time": estimated
-                    }
+                    },
+                    message_type="agent_status"
                 )
+                
+                if not message:
+                    # 消息不存在，创建新消息
+                    message = await self.add_message(
+                        conversation_id=conversation_id,
+                        role="agent",
+                        content=task_desc,
+                        message_type="agent_status",
+                        agent_name=agent,
+                        agent_status="working",
+                        extra_data={
+                            "progress": progress,
+                            "estimated_time": estimated
+                        },
+                        message_id=message_id
+                    )
                 
                 # 广播到 WebSocket
                 await ws_manager.broadcast_to_conversation(conversation_id, {
@@ -253,8 +312,28 @@ class ChatService:
                         task.current_task = task_desc
                         await db.commit()
             
-            # Agent 结果回调 - 发送中间结果
+            # Agent 结果回调 - 更新现有消息为完成状态
             async def result_callback(agent: str, result_summary: str, result_data: Dict = None):
+                # 使用已有的message_id更新消息
+                if agent in agent_message_ids:
+                    message_id = agent_message_ids[agent]
+                    # 更新现有消息
+                    message = await self.update_message(
+                        message_id=message_id,
+                        content=result_summary if not streamingMessages.get(message_id) else streamingMessages[message_id],
+                        agent_status="completed",
+                        message_type="agent_result",
+                        extra_data=result_data
+                    )
+                    
+                    if message:
+                        await ws_manager.broadcast_to_conversation(conversation_id, {
+                            "type": "agent_result",
+                            "message": message.to_dict()
+                        })
+                        return
+                
+                # 如果没有找到现有消息，创建新消息（兜底）
                 message = await self.add_message(
                     conversation_id=conversation_id,
                     role="agent",
@@ -270,13 +349,69 @@ class ChatService:
                     "message": message.to_dict()
                 })
             
+            # 流式回调 - 推送流式输出，使用与状态消息相同的message_id
+            async def stream_callback(message_id: str, agent_name: str, chunk: str, finished: bool):
+                # 如果agent还没有消息ID，使用传入的message_id
+                if agent_name not in agent_message_ids:
+                    agent_message_ids[agent_name] = message_id
+                else:
+                    # 使用已有的message_id，确保状态和流式输出在同一个消息中
+                    message_id = agent_message_ids[agent_name]
+                
+                # 如果是第一次流式输出，创建或更新消息为streaming状态
+                if chunk and not streamingMessages.get(message_id):
+                    streamingMessages[message_id] = ""
+                    # 确保消息存在
+                    message = await self.update_message(
+                        message_id=message_id,
+                        agent_status="streaming",
+                        message_type="streaming"
+                    )
+                    if not message:
+                        # 如果消息不存在，创建它
+                        await self.add_message(
+                            conversation_id=conversation_id,
+                            role="agent",
+                            content="",
+                            message_type="streaming",
+                            agent_name=agent_name,
+                            agent_status="streaming",
+                            message_id=message_id
+                        )
+                
+                # 更新流式内容
+                if chunk:
+                    streamingMessages[message_id] = streamingMessages.get(message_id, "") + chunk
+                    # 更新消息内容
+                    await self.update_message(
+                        message_id=message_id,
+                        content=streamingMessages[message_id]
+                    )
+                
+                # 流式完成，更新状态
+                if finished:
+                    await self.update_message(
+                        message_id=message_id,
+                        agent_status="completed",
+                        message_type="agent_result"
+                    )
+                
+                await ws_manager.broadcast_stream_chunk(
+                    conversation_id=conversation_id,
+                    message_id=message_id,
+                    agent_name=agent_name,
+                    chunk=chunk,
+                    finished=finished
+                )
+            
             # 运行 Workflow
             report = await self.workflow.run(
                 company=company,
                 depth="deep",
                 focus_areas=[],
                 progress_callback=progress_callback,
-                result_callback=result_callback
+                result_callback=result_callback,
+                stream_callback=stream_callback
             )
             
             # 更新任务状态并创建报告

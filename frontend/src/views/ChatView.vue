@@ -20,6 +20,9 @@ const isLoading = ref(false)
 const isSending = ref(false)
 const messagesContainer = ref<HTMLElement | null>(null)
 
+// 流式消息存储 { message_id: content }
+const streamingMessages = ref<Record<string, string>>({})
+
 // WebSocket
 let ws: WebSocket | null = null
 
@@ -76,9 +79,101 @@ function connectWebSocket() {
 function handleWebSocketMessage(data: any) {
   console.log('收到 WebSocket 消息:', data)
   
+  // 处理流式输出
+  if (data.type === 'stream_chunk') {
+    const { message_id, agent_name, chunk, finished } = data
+    
+    // 初始化流式消息
+    if (!streamingMessages.value[message_id]) {
+      streamingMessages.value[message_id] = ''
+      
+      // 检查是否已存在该消息（可能由agent_status创建）
+      const existingIndex = messages.value.findIndex(m => m.id === message_id)
+      
+      if (existingIndex === -1) {
+        // 不存在，创建流式消息占位符
+        const streamMessage: Message = {
+          id: message_id,
+          conversation_id: conversationId.value,
+          role: 'agent',
+          message_type: 'streaming',
+          content: '',
+          agent_name: agent_name,
+          agent_status: 'streaming',
+          extra_data: null,
+          created_at: new Date().toISOString()
+        }
+        messages.value.push(streamMessage)
+      } else {
+        // 已存在，更新为streaming状态
+        messages.value[existingIndex].agent_status = 'streaming'
+        messages.value[existingIndex].message_type = 'streaming'
+      }
+    }
+    
+    // 追加内容
+    if (chunk) {
+      streamingMessages.value[message_id] += chunk
+      
+      // 更新消息内容
+      const messageIndex = messages.value.findIndex(m => m.id === message_id)
+      if (messageIndex !== -1) {
+        messages.value[messageIndex].content = streamingMessages.value[message_id]
+        messages.value[messageIndex].agent_status = 'streaming'
+      }
+    }
+    
+    // 流式完成
+    if (finished) {
+      const messageIndex = messages.value.findIndex(m => m.id === message_id)
+      if (messageIndex !== -1) {
+        messages.value[messageIndex].agent_status = 'completed'
+        messages.value[messageIndex].message_type = 'agent_result'
+      }
+    }
+    
+    // 滚动到底部
+    nextTick(() => scrollToBottom())
+    return
+  }
+  
   if (data.message) {
-    // 添加新消息
-    messages.value.push(data.message)
+    const message = data.message as Message
+    
+    // 如果是agent状态消息，尝试更新现有消息而不是创建新消息
+    if (message.message_type === 'agent_status' && message.agent_name) {
+      // 查找是否已存在该agent的消息
+      const existingIndex = messages.value.findIndex(
+        m => m.agent_name === message.agent_name && 
+        (m.message_type === 'agent_status' || m.message_type === 'streaming' || m.message_type === 'agent_result') &&
+        m.agent_status !== 'completed'
+      )
+      
+      if (existingIndex !== -1) {
+        // 更新现有消息
+        messages.value[existingIndex] = { ...messages.value[existingIndex], ...message }
+      } else {
+        // 不存在，添加新消息
+        messages.value.push(message)
+      }
+    } else if (message.message_type === 'agent_result' && message.agent_name) {
+      // Agent结果消息，更新现有消息
+      const existingIndex = messages.value.findIndex(
+        m => m.agent_name === message.agent_name && 
+        (m.message_type === 'agent_status' || m.message_type === 'streaming')
+      )
+      
+      if (existingIndex !== -1) {
+        // 更新现有消息为完成状态
+        messages.value[existingIndex] = { ...messages.value[existingIndex], ...message }
+      } else {
+        // 不存在，添加新消息
+        messages.value.push(message)
+      }
+    } else {
+      // 其他类型消息，直接添加
+      messages.value.push(message)
+    }
     
     // 更新会话列表
     if (data.type === 'report_complete') {

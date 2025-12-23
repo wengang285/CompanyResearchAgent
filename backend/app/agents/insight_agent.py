@@ -1,12 +1,14 @@
 """洞察提炼 Agent - 综合分析结果，提炼核心洞察"""
 import json
 import re
-from typing import Dict, Any
+import uuid
+from typing import Dict, Any, Optional, Callable
 
 from agno.agent import Agent
 from agno.models.openai import OpenAILike
 
 from ..config import get_settings
+from ..utils.streaming_llm import streaming_llm
 
 settings = get_settings()
 
@@ -49,7 +51,8 @@ class InsightAgent:
         data: Dict[str, Any],
         financial_analysis: Dict[str, Any],
         market_analysis: Dict[str, Any],
-        depth: str = "deep"
+        depth: str = "deep",
+        stream_callback: Optional[Callable] = None
     ) -> Dict[str, Any]:
         """
         提炼投资洞察
@@ -60,6 +63,7 @@ class InsightAgent:
             financial_analysis: 财务分析结果
             market_analysis: 市场分析结果
             depth: 研究深度 (basic, standard, deep)
+            stream_callback: 流式回调函数 (message_id, agent_name, chunk, finished)
         
         Returns:
             核心洞察和投资建议
@@ -126,8 +130,30 @@ class InsightAgent:
 评分范围 1-10 分。只返回 JSON。"""
 
         try:
-            response = self.agent.run(prompt)
-            content = response.content if hasattr(response, 'content') else str(response)
+            # 创建流式消息ID
+            message_id = str(uuid.uuid4())
+            full_content = ""
+            
+            # 流式回调包装
+            async def stream_handler(chunk: str, metadata: dict = None):
+                nonlocal full_content
+                full_content += chunk
+                
+                if stream_callback:
+                    await stream_callback(
+                        message_id=message_id,
+                        agent_name="InsightAgent",
+                        chunk=chunk,
+                        finished=metadata.get("finished", False) if metadata else False
+                    )
+            
+            # 使用流式LLM调用
+            content = await streaming_llm.stream_completion_with_metadata(
+                prompt=prompt,
+                system_prompt="你是一位资深投资研究专家，擅长从多维度分析中提炼核心洞察。你的任务是综合财务和市场分析，给出专业的投资建议。投资建议要谨慎客观，风险提示要充分。请用中文回复。",
+                stream_callback=stream_handler,
+                temperature=0.7
+            )
             
             json_match = re.search(r'\{[\s\S]*\}', content)
             if json_match:

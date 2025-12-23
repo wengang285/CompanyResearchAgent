@@ -74,7 +74,8 @@ class ResearchWorkflow:
         depth: str = "deep",
         focus_areas: List[str] = None,
         progress_callback: Optional[Callable] = None,
-        result_callback: Optional[Callable] = None
+        result_callback: Optional[Callable] = None,
+        stream_callback: Optional[Callable] = None
     ) -> Dict[str, Any]:
         """
         执行研究工作流
@@ -85,6 +86,7 @@ class ResearchWorkflow:
             focus_areas: 关注领域
             progress_callback: 进度回调 (progress, agent, task, estimated_time)
             result_callback: 结果回调 (agent, result_summary, result_data)
+            stream_callback: 流式回调 (message_id, agent_name, chunk, finished)
         
         Returns:
             完整的研究报告
@@ -126,7 +128,11 @@ class ResearchWorkflow:
             if progress_callback:
                 await progress_callback(18, "DataAgent", "📊 正在整理数据...", 90)
             
-            state.data_result = await self.data_agent.run(state.search_result, depth=depth)
+            state.data_result = await self.data_agent.run(
+                state.search_result,
+                depth=depth,
+                stream_callback=stream_callback
+            )
             state.progress = 30
             
             # 发送数据整理结果
@@ -144,10 +150,10 @@ class ResearchWorkflow:
             
             # 并行执行财务分析和市场分析
             finance_task = asyncio.create_task(
-                self.finance_agent.run(state.data_result, depth=depth)
+                self.finance_agent.run(state.data_result, depth=depth, stream_callback=stream_callback)
             )
             market_task = asyncio.create_task(
-                self.market_agent.run(state.data_result, depth=depth)
+                self.market_agent.run(state.data_result, depth=depth, stream_callback=stream_callback)
             )
             
             state.finance_result, state.market_result = await asyncio.gather(
@@ -182,7 +188,8 @@ class ResearchWorkflow:
                 data=state.data_result,
                 financial_analysis=state.finance_result,
                 market_analysis=state.market_result,
-                depth=depth
+                depth=depth,
+                stream_callback=stream_callback
             )
             state.progress = 80
             
@@ -205,7 +212,8 @@ class ResearchWorkflow:
                 financial_analysis=state.finance_result,
                 market_analysis=state.market_result,
                 insights=state.insight_result,
-                depth=depth
+                depth=depth,
+                stream_callback=stream_callback
             )
             state.progress = 100
             state.current_step = WorkflowStep.COMPLETED

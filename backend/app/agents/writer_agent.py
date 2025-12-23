@@ -1,13 +1,15 @@
 """报告撰写 Agent - 生成最终研究报告"""
 import json
 import re
-from typing import Dict, Any, List
+import uuid
+from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime
 
 from agno.agent import Agent
 from agno.models.openai import OpenAILike
 
 from ..config import get_settings
+from ..utils.streaming_llm import streaming_llm
 
 settings = get_settings()
 
@@ -50,7 +52,8 @@ class WriterAgent:
         financial_analysis: Dict[str, Any],
         market_analysis: Dict[str, Any],
         insights: Dict[str, Any],
-        depth: str = "deep"
+        depth: str = "deep",
+        stream_callback: Optional[Callable] = None
     ) -> Dict[str, Any]:
         """
         生成研究报告
@@ -62,6 +65,7 @@ class WriterAgent:
             market_analysis: 市场分析结果
             insights: 投资洞察
             depth: 研究深度 (basic, standard, deep)
+            stream_callback: 流式回调函数 (message_id, agent_name, chunk, finished)
         
         Returns:
             完整的研究报告
@@ -75,7 +79,7 @@ class WriterAgent:
         
         # 生成执行摘要
         executive_summary = await self._generate_executive_summary(
-            company, structured_data, fin_analysis, mkt_analysis, insight_data
+            company, structured_data, fin_analysis, mkt_analysis, insight_data, stream_callback
         )
         
         # 构建完整报告
@@ -208,7 +212,8 @@ class WriterAgent:
         structured_data: Dict,
         fin_analysis: Dict,
         mkt_analysis: Dict,
-        insights: Dict
+        insights: Dict,
+        stream_callback: Optional[Callable] = None
     ) -> str:
         """生成执行摘要"""
         prompt = f"""请为 {company} 撰写一份专业的研究报告执行摘要。
@@ -236,8 +241,31 @@ class WriterAgent:
 直接返回摘要文本，不要标题。"""
 
         try:
-            response = self.agent.run(prompt)
-            content = response.content if hasattr(response, 'content') else str(response)
+            # 创建流式消息ID
+            message_id = str(uuid.uuid4())
+            full_content = ""
+            
+            # 流式回调包装
+            async def stream_handler(chunk: str, metadata: dict = None):
+                nonlocal full_content
+                full_content += chunk
+                
+                if stream_callback:
+                    await stream_callback(
+                        message_id=message_id,
+                        agent_name="WriterAgent",
+                        chunk=chunk,
+                        finished=metadata.get("finished", False) if metadata else False
+                    )
+            
+            # 使用流式LLM调用
+            content = await streaming_llm.stream_completion_with_metadata(
+                prompt=prompt,
+                system_prompt="你是一位资深研究报告撰写专家，擅长将分析结果整合成专业的研究报告。报告要结构清晰、逻辑严谨、表述专业。语言要简洁有力，重点突出。请用中文回复。",
+                stream_callback=stream_handler,
+                temperature=0.7
+            )
+            
             return content.strip()
         except Exception as e:
             print(f"[WriterAgent] 生成执行摘要失败: {e}")
