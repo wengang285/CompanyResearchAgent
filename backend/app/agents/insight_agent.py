@@ -124,10 +124,28 @@ class InsightAgent:
         "reasoning": "投资建议理由(100-150字)",
         "target_audience": "适合的投资者类型"
     }},
-    "overall_score": 7
+    "overall_score": <根据以下规则计算综合评分>
 }}
 
-评分范围 1-10 分。只返回 JSON。"""
+## 综合评分计算规则（重要）：
+综合评分 = (财务评分 × 0.4 + 市场评分 × 0.35 + 成长潜力 × 0.15 + 风险调整 × 0.1)
+
+其中：
+- 财务评分：使用财务分析的综合评分
+- 市场评分：使用市场地位评分
+- 成长潜力：根据发展前景评级计算（看好=8分，中性=6分，谨慎=4分）
+- 风险调整：根据关键风险数量调整（无风险=+1，低风险=0，中风险=-1，高风险=-2）
+
+最终评分需要四舍五入到整数，范围严格控制在 1-10 分。
+
+评分标准：
+- 9-10分：优秀，财务和市场表现突出，风险可控，强烈推荐
+- 7-8分：良好，整体表现不错，有一定投资价值
+- 5-6分：一般，表现平平，需要谨慎考虑
+- 3-4分：较差，存在明显问题，不推荐
+- 1-2分：很差，严重问题，强烈不推荐
+
+请根据实际分析结果，严格按照上述规则计算综合评分，不要默认给7分。只返回 JSON。"""
 
         try:
             # 创建流式消息ID
@@ -158,7 +176,25 @@ class InsightAgent:
             json_match = re.search(r'\{[\s\S]*\}', content)
             if json_match:
                 insights = json.loads(json_match.group())
-                print(f"[InsightAgent] 洞察提炼完成，投资评级: {insights.get('recommendation', {}).get('rating', 'N/A')}")
+                
+                # 验证并修正综合评分
+                calculated_score = self._calculate_overall_score(
+                    fin_analysis.get('overall_score', 5),
+                    mkt_analysis.get('market_position', {}).get('score', 5),
+                    mkt_analysis.get('outlook', {}).get('rating', '中性'),
+                    len(insights.get('key_risks', []))
+                )
+                
+                # 如果LLM给出的评分是默认值（7分）或与计算值差异较大，使用计算值
+                llm_score = insights.get('overall_score', 7)
+                if llm_score == 7 and abs(llm_score - calculated_score) > 1.5:
+                    insights['overall_score'] = round(calculated_score)
+                    print(f"[InsightAgent] 评分修正: LLM={llm_score} -> 计算值={insights['overall_score']}")
+                else:
+                    # 使用LLM评分，但确保在合理范围内
+                    insights['overall_score'] = max(1, min(10, round(llm_score)))
+                
+                print(f"[InsightAgent] 洞察提炼完成，投资评级: {insights.get('recommendation', {}).get('rating', 'N/A')}, 综合评分: {insights['overall_score']}")
                 
                 return {
                     "company": company,
@@ -173,6 +209,55 @@ class InsightAgent:
             "insights": self._default_insights(),
             "status": "partial"
         }
+    
+    def _calculate_overall_score(
+        self,
+        financial_score: float,
+        market_score: float,
+        outlook_rating: str,
+        risk_count: int
+    ) -> float:
+        """
+        基于公式计算综合评分
+        
+        Args:
+            financial_score: 财务分析评分 (1-10)
+            market_score: 市场地位评分 (1-10)
+            outlook_rating: 发展前景评级 (看好/中性/谨慎)
+            risk_count: 关键风险数量
+        
+        Returns:
+            综合评分 (1-10)
+        """
+        # 成长潜力评分（根据发展前景）
+        growth_scores = {
+            "看好": 8.0,
+            "中性": 6.0,
+            "谨慎": 4.0
+        }
+        growth_score = growth_scores.get(outlook_rating, 6.0)
+        
+        # 风险调整（风险越多，扣分越多）
+        risk_adjustment = 0.0
+        if risk_count == 0:
+            risk_adjustment = 1.0  # 无风险加分
+        elif risk_count <= 2:
+            risk_adjustment = 0.0  # 低风险不调整
+        elif risk_count <= 4:
+            risk_adjustment = -1.0  # 中风险扣分
+        else:
+            risk_adjustment = -2.0  # 高风险扣分
+        
+        # 加权计算
+        overall_score = (
+            financial_score * 0.4 +      # 财务分析权重 40%
+            market_score * 0.35 +         # 市场分析权重 35%
+            growth_score * 0.15 +         # 成长潜力权重 15%
+            risk_adjustment * 0.1         # 风险调整权重 10%
+        )
+        
+        # 确保在 1-10 范围内
+        return max(1.0, min(10.0, overall_score))
     
     def _default_insights(self) -> Dict[str, Any]:
         """返回默认洞察结构"""
