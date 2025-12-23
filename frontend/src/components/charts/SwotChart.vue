@@ -13,7 +13,7 @@ interface SwotData {
   threats: SwotItemType[]
 }
 
-const props = defineProps<{
+defineProps<{
   data: SwotData
 }>()
 

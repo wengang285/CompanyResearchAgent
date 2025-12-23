@@ -107,11 +107,6 @@ const agentInfo = computed(() => {
   }
 })
 
-// 头像首字母（用于备用显示）
-const avatarInitial = computed(() => {
-  return props.agentName.charAt(0).toUpperCase()
-})
-
 // 状态标签
 const statusLabel = computed(() => {
   if (props.status === 'working') return '处理中...'

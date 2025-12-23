@@ -20,7 +20,7 @@ export interface Message {
   id: string
   conversation_id: string
   role: 'user' | 'assistant' | 'agent' | 'system'
-  message_type: 'text' | 'agent_status' | 'agent_result' | 'report_preview' | 'error'
+  message_type: 'text' | 'agent_status' | 'agent_result' | 'report_preview' | 'error' | 'streaming'
   content: string
   agent_name: string | null
   agent_status: string | null
